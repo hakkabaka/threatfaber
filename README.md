@@ -112,22 +112,22 @@ If you package the binary for distribution, ship the matching PDFium library bes
 
 ## Usage
 
-Run against a directory containing PDF files:
+Run the binary against a directory containing PDF files:
 
 ```bash
-cargo run -- --input test_input/2
+./threatfaber --input ./sample-pdfs
 ```
 
 Custom output directory:
 
 ```bash
-cargo run -- --input test_input/2 --output result
+./threatfaber --input ./sample-pdfs --output ./result
 ```
 
 Adjust the relevance threshold:
 
 ```bash
-cargo run -- --input test_input/2 --min-score 70
+./threatfaber --input ./sample-pdfs --min-score 70
 ```
 
 ## Output
