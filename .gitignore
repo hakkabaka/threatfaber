@@ -1,0 +1,6 @@
+/target
+.env
+/test_input
+/test_fun
+/result
+.claude

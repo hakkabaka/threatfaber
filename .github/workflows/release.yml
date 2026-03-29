@@ -1,0 +1,231 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: threatfaber
+
+jobs:
+  prepare-release:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: meta
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [[ -z "$version" ]]; then
+            echo "Failed to read version from Cargo.toml" >&2
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="v${version}"
+          fi
+
+          if [[ "$tag" != "v${version}" ]]; then
+            echo "Git tag ${tag} does not match Cargo.toml version ${version}" >&2
+            exit 1
+          fi
+
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "release_name=${tag}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        shell: bash
+        run: bash ./scripts/extract_release_notes.sh "${{ steps.meta.outputs.version }}" > release-notes.md
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: prepare-release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_suffix: linux-x64
+            binary_name: threatfaber
+            lib_archive: dist/pdfium-linux-x64.tgz
+            lib_archive_path: lib/libpdfium.so
+            lib_name: libpdfium.so
+            archive_type: tar.gz
+          - label: linux-x86
+            runner: ubuntu-latest
+            target: i686-unknown-linux-gnu
+            archive_suffix: linux-x86
+            binary_name: threatfaber
+            lib_archive: dist/pdfium-linux-x86.tgz
+            lib_archive_path: lib/libpdfium.so
+            lib_name: libpdfium.so
+            archive_type: tar.gz
+          - label: win-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_suffix: win-x64
+            binary_name: threatfaber.exe
+            lib_archive: dist/pdfium-win-x64.tgz
+            lib_archive_path: bin/pdfium.dll
+            lib_name: pdfium.dll
+            archive_type: zip
+          - label: win-x86
+            runner: windows-latest
+            target: i686-pc-windows-msvc
+            archive_suffix: win-x86
+            binary_name: threatfaber.exe
+            lib_archive: dist/pdfium-win-x86.tgz
+            lib_archive_path: bin/pdfium.dll
+            lib_name: pdfium.dll
+            archive_type: zip
+          - label: mac-arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            archive_suffix: mac-arm64
+            binary_name: threatfaber
+            lib_archive: dist/pdfium-mac-arm64.tgz
+            lib_archive_path: lib/libpdfium.dylib
+            lib_name: libpdfium.dylib
+            archive_type: tar.gz
+          - label: mac-x64
+            runner: macos-13
+            target: x86_64-apple-darwin
+            archive_suffix: mac-x64
+            binary_name: threatfaber
+            lib_archive: dist/pdfium-mac-x64.tgz
+            lib_archive_path: lib/libpdfium.dylib
+            lib_name: libpdfium.dylib
+            archive_type: tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust target
+        shell: bash
+        run: rustup target add "${{ matrix.target }}"
+
+      - name: Install Linux cross-compile dependencies
+        if: runner.os == 'Linux' && matrix.target == 'i686-unknown-linux-gnu'
+        shell: bash
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib libc6-dev-i386
+
+      - name: Configure Linux x86 linker
+        if: runner.os == 'Linux' && matrix.target == 'i686-unknown-linux-gnu'
+        shell: bash
+        run: |
+          mkdir -p .cargo
+          cat <<'EOF' > .cargo/config.toml
+          [target.i686-unknown-linux-gnu]
+          linker = "gcc"
+          rustflags = ["-C", "link-arg=-m32"]
+          EOF
+
+      - name: Build binary
+        shell: bash
+        run: cargo build --release --locked --target "${{ matrix.target }}"
+
+      - name: Package tarball
+        if: matrix.archive_type == 'tar.gz'
+        shell: bash
+        run: |
+          archive_name="threatfaber-v${{ needs.prepare-release.outputs.version }}-${{ matrix.archive_suffix }}.tar.gz"
+          staging_dir="release/${{ matrix.label }}"
+          extract_dir="${staging_dir}/pdfium"
+          mkdir -p "$staging_dir"
+          mkdir -p "$extract_dir"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "$staging_dir/${{ matrix.binary_name }}"
+          tar -xzf "${{ matrix.lib_archive }}" -C "$extract_dir" "${{ matrix.lib_archive_path }}"
+          cp "$extract_dir/${{ matrix.lib_archive_path }}" "$staging_dir/${{ matrix.lib_name }}"
+          if [[ ! -f "$staging_dir/${{ matrix.lib_name }}" ]]; then
+            echo "Expected ${{ matrix.lib_archive_path }} in ${{ matrix.lib_archive }}" >&2
+            exit 1
+          fi
+          rm -rf "$extract_dir"
+          tar -czf "$archive_name" -C "$staging_dir" .
+
+      - name: Package zip
+        if: matrix.archive_type == 'zip'
+        shell: pwsh
+        run: |
+          $archiveName = "threatfaber-v${{ needs.prepare-release.outputs.version }}-${{ matrix.archive_suffix }}.zip"
+          $stagingDir = "release/${{ matrix.label }}"
+          $extractDir = "$stagingDir/pdfium"
+          New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "$stagingDir/${{ matrix.binary_name }}"
+          tar -xzf "${{ matrix.lib_archive }}" -C $extractDir "${{ matrix.lib_archive_path }}"
+          Copy-Item "$extractDir/${{ matrix.lib_archive_path }}" "$stagingDir/${{ matrix.lib_name }}"
+          if (-not (Test-Path "$stagingDir/${{ matrix.lib_name }}")) {
+            Write-Error "Expected ${{ matrix.lib_archive_path }} in ${{ matrix.lib_archive }}"
+          }
+          Remove-Item -Recurse -Force $extractDir
+          Compress-Archive -Path "$stagingDir/*" -DestinationPath $archiveName -Force
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.label }}
+          path: threatfaber-v${{ needs.prepare-release.outputs.version }}-${{ matrix.archive_suffix }}.*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub release
+    needs:
+      - prepare-release
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: bundle-*
+          merge-multiple: true
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.tag }}
+          name: ${{ needs.prepare-release.outputs.release_name }}
+          body_path: release-notes.md
+          files: artifacts/*
+          draft: false
+          prerelease: false
