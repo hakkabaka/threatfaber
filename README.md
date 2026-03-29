@@ -112,7 +112,7 @@ If you package the binary for distribution, ship the matching PDFium library bes
 
 ## Usage
 
-Run the binary against a directory containing PDF files:
+Run against a directory containing PDF files:
 
 ```bash
 ./threatfaber --input ./sample-pdfs
@@ -222,11 +222,7 @@ cargo check
 ```
 
 The project currently targets:
-- Rust edition `2024`
+- Rust
 - `rig-core` for OpenAI calls
 - `pdfium-render` for page rendering
 - `unpdf` for text extraction
-
-## Status
-
-This is an active workflow prototype focused on architecture-document ingestion and service-level threat modeling.
