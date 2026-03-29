@@ -108,7 +108,7 @@ jobs:
             lib_name: pdfium.dll
             archive_type: zip
           - label: mac-arm64
-            runner: macos-14
+            runner: macos-15
             target: aarch64-apple-darwin
             archive_suffix: mac-arm64
             binary_name: threatfaber
@@ -117,7 +117,7 @@ jobs:
             lib_name: libpdfium.dylib
             archive_type: tar.gz
           - label: mac-x64
-            runner: macos-13
+            runner: macos-15-intel
             target: x86_64-apple-darwin
             archive_suffix: mac-x64
             binary_name: threatfaber
